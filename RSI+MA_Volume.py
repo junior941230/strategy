@@ -1,3 +1,5 @@
+import backtrader as bt
+
 class CombinedStrategy(bt.Strategy):
     params = (
         ('fast_period', 5),
