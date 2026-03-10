@@ -75,7 +75,12 @@ class TrendBBStrategy(bt.Strategy):
 
     def notify_order(self, order):
         if order.status in [order.Completed]:
-            side = "買入" if order.isbuy() else "賣出"
-            print(f"== {side}執行: 價格 {order.executed.price:.2f}, 成本 {order.executed.value:.2f} ==")
-        elif order.status in [order.Margin, order.Rejected]:
-            print(f"警告：訂單被拒絕或資金不足！日期 {self.data.datetime.date(0)}")
+            if order.isbuy():
+                self.buy_price = order.executed.price
+                self.highest_price = order.executed.price  # 初始化最高價
+                print(f"買入執行: {self.buy_price:.2f}, 日期 {self.data.datetime.date(0)}")
+            elif order.issell():
+                print(f"賣出執行: {order.executed.price:.2f}, 日期 {self.data.datetime.date(0)}")
+                # 重置追蹤變數
+                self.buy_price = None
+                self.highest_price = None
