@@ -38,14 +38,14 @@ class TrendBBStrategy(bt.Strategy):
             if close > self.ma50[0] and close <= self.bot[0]:
                 actual_invest = min(self.params.tradeValue, current_equity * 0.95)
                 self.order_target_value(target=actual_invest)
-                print(f"【做多進場】價格: {close}, 日期: {self.data.datetime.date(0)}")
+                self.log(f"【做多進場】價格: {close}, 日期: {self.data.datetime.date(0)}")
 
             # 空頭趨勢：收盤 < MA50 且 觸及布林上軌 (高拋)
             # 註：Backtrader 做空需確保券商設定允許，此處以 sell 表示
             elif close < self.ma50[0] and close >= self.top[0]:
                 actual_invest = min(self.params.tradeValue, current_equity * 0.95)
                 self.order_target_value(target=-actual_invest) # 負值代表放空目標價值
-                print(f"【做空進場】價格: {close}, 日期: {self.data.datetime.date(0)}")
+                self.log(f"【做空進場】價格: {close}, 日期: {self.data.datetime.date(0)}")
 
         # --- 有持倉：出場邏輯 ---
         else:
@@ -54,33 +54,33 @@ class TrendBBStrategy(bt.Strategy):
                 # 停利：觸及布林上軌
                 if close >= self.top[0]:
                     self.close()
-                    print(f"【多單停利】價格: {close}, 日期: {self.data.datetime.date(0)}")
+                    self.log(f"【多單停利】價格: {close}, 日期: {self.data.datetime.date(0)}")
                 
                 # 停損：開盤與收盤皆破下軌
                 elif close < self.bot[0] and open_price < self.bot[0]:
                     self.close()
-                    print(f"【多單停損】價格: {close}, 日期: {self.data.datetime.date(0)}")
+                    self.log(f"【多單停損】價格: {close}, 日期: {self.data.datetime.date(0)}")
 
             # 持有空單 (Short Position)
             elif self.position.size < 0:
                 # 停利：觸及布林下軌
                 if close <= self.bot[0]:
                     self.close()
-                    print(f"【空單停利】價格: {close}, 日期: {self.data.datetime.date(0)}")
+                    self.log(f"【空單停利】價格: {close}, 日期: {self.data.datetime.date(0)}")
                 
                 # 停損：開盤與收盤皆破上軌
                 elif close > self.top[0] and open_price > self.top[0]:
                     self.close()
-                    print(f"【空單停損】價格: {close}, 日 : {self.data.datetime.date(0)}")
+                    self.log(f"【空單停損】價格: {close}, 日期: {self.data.datetime.date(0)}")
 
     def notify_order(self, order):
         if order.status in [order.Completed]:
             if order.isbuy():
                 self.buy_price = order.executed.price
                 self.highest_price = order.executed.price  # 初始化最高價
-                print(f"買入執行: {self.buy_price:.2f}, 日期 {self.data.datetime.date(0)}")
+                self.log(f"買入執行: {self.buy_price:.2f}, 日期 {self.data.datetime.date(0)}")
             elif order.issell():
-                print(f"賣出執行: {order.executed.price:.2f}, 日期 {self.data.datetime.date(0)}")
+                self.log(f"賣出執行: {order.executed.price:.2f}, 日期 {self.data.datetime.date(0)}")
                 # 重置追蹤變數
                 self.buy_price = None
                 self.highest_price = None
