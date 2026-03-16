@@ -16,124 +16,91 @@ class TradeRecorder(bt.Analyzer):
 
 class template(bt.Strategy):
         import backtrader as bt
-    from backtrader.indicators import *
 
+    class TrendBBStrategy(bt.Strategy):
+        params = (
+            ('ma_period', 50),      # 長期趨勢均線
+            ('bb_period', 20),      # 布林通道週期
+            ('bb_dev', 2.0),        # 布林通道標準差
+            ('tradeValue', 500000), # 單筆預計投入金額
+        )
 
-    class TradeRecorder(bt.Analyzer):
         def __init__(self):
-            self.trades = []
-
-        def notify_trade(self, trade):
-            if trade.isclosed:
-                self.trades.append(trade)
-
-        def get_analysis(self):
-            return self.trades
-
-
-    class template(bt.Strategy):
-            import backtrader as bt
-
-        class CombinedStrategy(bt.Strategy):
-            params = (
-                ('fast_period', 5),
-                ('slow_period', 20),
-                ('exit_period', 10),
-                ('rsi_period', 14),
-                ('rsi_buy_level', 60),
-                ('rsi_sell_level', 40),
-                ('vol_period', 5),
-                ('vol_buy_ratio', 1.5),
-                ('vol_sell_ratio', 0.8),
-                ('tradeValue', 500000),
-                ('stop_loss', 0.05),      # 固定停損 5%
-                ('trail_percent', 0.03),  # 創新高後回檔 3% 停利
+            # 1. 定義移動平均線 (判斷大趨勢)
+            self.ma50 = bt.indicators.SimpleMovingAverage(
+                self.data.close, period=self.params.ma_period
             )
 
-            def __init__(self):
-                # 基礎指標定義
-                self.fast_ma = bt.indicators.SMA(self.data.close, period=self.params.fast_period)
-                self.slow_ma = bt.indicators.SMA(self.data.close, period=self.params.slow_period)
-                self.exit_ma = bt.indicators.SMA(self.data.close, period=self.params.exit_period)
-                self.ma_crossover = bt.indicators.CrossOver(self.fast_ma, self.slow_ma)
-                self.rsi = bt.indicators.RSI(self.data.close, period=self.params.rsi_period)
-                self.vol_ma = bt.indicators.SMA(self.data.volume, period=self.params.vol_period)
+            # 2. 定義布林通道
+            self.bb = bt.indicators.BollingerBands(
+                self.data.close, 
+                period=self.params.bb_period, 
+                devfactor=self.params.bb_dev
+            )
 
-                # 用於追蹤停利與停損的變數
-                self.buy_price = None
-                self.highest_price = None
+            # 為了方便讀取，給軌道取別名
+            self.top = self.bb.lines.top
+            self.bot = self.bb.lines.bot
 
-            def next(self):
-                current_equity = self.broker.getvalue()
+        def next(self):
+            current_equity = self.broker.getvalue()
 
-                # --- 無持倉：進場邏輯 ---
-                if not self.position:
-                    # 買入條件：5MA上穿20MA AND (RSI > 60 OR 量增 1.5倍)
-                    buy_sig = (self.ma_crossover > 0) and (
-                        (self.rsi[0] > self.params.rsi_buy_level) or 
-                        (self.data.volume[0] > self.vol_ma[0] * self.params.vol_buy_ratio)
-                    )
+            # 取得當前價格與軌道值
+            close = self.data.close[0]
+            open_price = self.data.open[0]
 
-                    if buy_sig:
-                        actual_invest = min(self.params.tradeValue, current_equity * 0.95)
-                        self.order_target_value(target=actual_invest)
-                        # 注意：buy_price 會在 notify_order 中正式成交時更新
+            # --- 無持倉：進場邏輯 ---
+            if not self.position:
+                # 多頭趨勢：收盤 > MA50 且 觸及布林下軌 (低接)
+                if close > self.ma50[0] and close <= self.bot[0]:
+                    actual_invest = min(self.params.tradeValue, current_equity * 0.95)
+                    self.order_target_value(target=actual_invest)
+                    self.log(f"【做多進場】價格: {close}, 日期: {self.data.datetime.date(0)}")
 
-                # --- 有持倉：出場邏輯 ---
-                else:
-                    if self.buy_price is None or self.highest_price is None:
-                        return
-                    # 更新持倉期間最高價
-                    self.highest_price = max(self.highest_price, self.data.close[0])
+                # 空頭趨勢：收盤 < MA50 且 觸及布林上軌 (高拋)
+                # 註：Backtrader 做空需確保券商設定允許，此處以 sell 表示
+                elif close < self.ma50[0] and close >= self.top[0]:
+                    actual_invest = min(self.params.tradeValue, current_equity * 0.95)
+                    self.order_target_value(target=-actual_invest) # 負值代表放空目標價值
+                    self.log(f"【做空進場】價格: {close}, 日期: {self.data.datetime.date(0)}")
 
-                    # 1. 固定停損：價格跌超過進場價的 5%
-                    stop_loss_signal = self.data.close[0] < self.buy_price * (1 - self.params.stop_loss)
-
-                    # 2. 移動停利：價格從最高點回檔超過 3%
-                    take_profit_signal = self.data.close[0] < self.highest_price * (1 - self.params.trail_percent)
-
-                    # 3. 原本的指標條件賣出 (跌破10MA AND RSI<40 AND 量縮)
-                    indicator_sell_sig = (self.data.close[0] < self.exit_ma[0]) and \
-                                        (self.rsi[0] < self.params.rsi_sell_level) and \
-                                         (self.data.volume[0] < self.vol_ma[0] * self.params.vol_sell_ratio)
-
-                    if stop_loss_signal:
-                        print(f"【固定停損觸發】日期: {self.data.datetime.date(0)}")
+            # --- 有持倉：出場邏輯 ---
+            else:
+                # 持有多單 (Long Position)
+                if self.position.size > 0:
+                    # 停利：觸及布林上軌
+                    if close >= self.top[0]:
                         self.close()
-                    elif take_profit_signal:
-                        print(f"【移動停利觸發】日期: {self.data.datetime.date(0)}")
-                        self.close()
-                    elif indicator_sell_sig:
-                        print(f"【指標訊號賣出】日期: {self.data.datetime.date(0)}")
-                        self.close()
+                        self.log(f"【多單停利】價格: {close}, 日期: {self.data.datetime.date(0)}")
 
-            def notify_order(self, order):
-                if order.status in [order.Completed]:
-                    if order.isbuy():
-                        self.buy_price = order.executed.price
-                        self.highest_price = order.executed.price  # 初始化最高價
-                        print(f"買入執行: {self.buy_price:.2f}, 日期 {self.data.datetime.date(0)}")
-                    elif order.issell():
-                        print(f"賣出執行: {order.executed.price:.2f}, 日期 {self.data.datetime.date(0)}")
-                        # 重置追蹤變數
-                        self.buy_price = None
-                        self.highest_price = None
+                    # 停損：開盤與收盤皆破下軌
+                    elif close < self.bot[0] and open_price < self.bot[0]:
+                        self.close()
+                        self.log(f"【多單停損】價格: {close}, 日期: {self.data.datetime.date(0)}")
+
+                # 持有空單 (Short Position)
+                elif self.position.size < 0:
+                    # 停利：觸及布林下軌
+                    if close <= self.bot[0]:
+                        self.close()
+                        self.log(f"【空單停利】價格: {close}, 日期: {self.data.datetime.date(0)}")
+
+                    # 停損：開盤與收盤皆破上軌
+                    elif close > self.top[0] and open_price > self.top[0]:
+                        self.close()
+                        self.log(f"【空單停損】價格: {close}, 日期: {self.data.datetime.date(0)}")
+
         def notify_order(self, order):
-            # 如果訂單狀態是已提交或已被券商接受，不需處理
-            if order.status in [order.Submitted, order.Accepted]:
-                return
-
-            # # 如果訂單狀態是完成
-            # if order.status in [order.Completed]:
-            #     if order.isbuy():
-            #         print(f"買單執行: 價格 {order.executed.price}, 成本 {order.executed.value}, 手續費 {order.executed.comm}")
-            #     elif order.issell():
-            #         print(f"賣單執行: 價格 {order.executed.price}, 成本 {order.executed.value}, 手續費 {order.executed.comm}")
-
-            # 如果訂單被拒絕、取消或保證金不足 (這就是你遇到的狀況)
-            elif order.status in [order.Canceled, order.Margin, order.Rejected]:
-                print("警告：訂單被拒絕或資金不足！")
-
+            if order.status in [order.Completed]:
+                if order.isbuy():
+                    self.buy_price = order.executed.price
+                    self.highest_price = order.executed.price  # 初始化最高價
+                    self.log(f"買入執行: {self.buy_price:.2f}, 日期 {self.data.datetime.date(0)}")
+                elif order.issell():
+                    self.log(f"賣出執行: {order.executed.price:.2f}, 日期 {self.data.datetime.date(0)}")
+                    # 重置追蹤變數
+                    self.buy_price = None
+                    self.highest_price = None
     def notify_order(self, order):
         # 如果訂單狀態是已提交或已被券商接受，不需處理
         if order.status in [order.Submitted, order.Accepted]:
